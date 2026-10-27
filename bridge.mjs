@@ -11,6 +11,7 @@
 //   HERMES_BIN         default hermes
 //   BRIDGE_TIMEOUT_S   per-reply timeout, default 240
 import { spawn } from "node:child_process";
+import { Governor } from "./governor.mjs";
 import { readFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,20 +26,28 @@ const HERMES_BIN = env("HERMES_BIN", "hermes");
 const TIMEOUT_MS = Number(env("BRIDGE_TIMEOUT_S", "240")) * 1000;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOM_DIR = path.join(HERE, "room");
-const MAX_REPLIES_PER_HOUR = 12;
-const QUIET_WORDS = ["quiet", "shush", "stop"];
-const RESUME_WORDS = ["resume"];
+
 
 const TOKEN = readFileSync(TOKEN_FILE, "utf8").trim();
 mkdirSync(ROOM_DIR, { recursive: true });
+
+// Shared silence-biased policy (same Governor the residents use).
+let POLICY = {};
+try { POLICY = JSON.parse(readFileSync(path.join(HERE, "governor.json"), "utf8")); } catch { /* defaults */ }
+const BOT_PEERS = ["umpire-bot", "gate-bot", "resident", "squire", "colt"];
+const BOT_QUIET_START = env("BOT_QUIET_START", "") === "1";
 
 let ws = null;
 let seq = 0;
 const pending = new Map();
 const myMessageIds = new Set();
-const replyTimes = [];
+const gov = new Governor(POLICY, { self: SELF, bots: BOT_PEERS });
+if (BOT_QUIET_START) {
+  gov.quiet = true;
+  gov.quietUntil = Infinity;
+  console.log("governor: starting quiet (BOT_QUIET_START=1) — resume via chat");
+}
 let lastRoom = ROOMS[0];
-let quiet = false;
 let queue = Promise.resolve(); // serialize hermes runs
 const recent = []; // last N room messages for context: {from, text}
 
@@ -82,7 +91,6 @@ async function postReply(roomId, replyTo, text) {
     body: { text, format: "plain" },
   });
   if (posted.message_id) myMessageIds.add(posted.message_id);
-  replyTimes.push(Date.now());
 }
 
 async function handle(m) {
@@ -95,33 +103,18 @@ async function handle(m) {
   }
   if (!from || from === SELF) return;
 
-  const text = m.text.toLowerCase();
-  // Ack only on the false→true transition: the ack text itself contains a
-  // quiet word and our name, so re-acking every match echo-loops forever.
-  if (QUIET_WORDS.some((w) => text.includes(w)) && isAddressed(m)) {
-    if (quiet) return;
-    quiet = true;
+  const d = gov.classify({ from, text: m.text, replyTo: m.reply_to ?? null });
+  if (d.action === "quiet") {
     console.log(`bridge: quiet until resumed (triggered by ${from})`);
     await postReply(m.room, m.message_id, `Going quiet. Say "${SELF} resume" to bring me back.`);
     return;
   }
-  if (quiet) {
-    if (RESUME_WORDS.some((w) => text.includes(w)) && isAddressed(m)) {
-      quiet = false;
-      await postReply(m.room, m.message_id, "Back.");
-    }
+  if (d.action === "resumed") {
+    await postReply(m.room, m.message_id, "Back.");
     return;
   }
-
-  if (!isAddressed(m)) {
-    console.log(`bridge: observed ${from} (no reply)`);
-    return;
-  }
-
-  const now = Date.now();
-  while (replyTimes.length && now - replyTimes[0] > 60 * 60 * 1000) replyTimes.shift();
-  if (replyTimes.length >= MAX_REPLIES_PER_HOUR) {
-    console.log(`bridge: cooldown cap for ${from}`);
+  if (d.action !== "reply") {
+    console.log(`bridge: observed ${from} (no reply${d.reason ? `: ${d.reason}` : ""})`);
     return;
   }
 
@@ -135,6 +128,7 @@ async function handle(m) {
     context,
     ``,
     `${from} has addressed you and is waiting for a reply: "${m.text}"`,
+    `(You are in room id ${m.room ?? lastRoom} — needed for the spawn-task tool.)`,
     `Reply with only the message to post in the room — concise and casual, no preamble, no quotes around it. Plain text.`,
   ].join("\n");
 

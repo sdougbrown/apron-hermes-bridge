@@ -1,0 +1,1 @@
+This is a pipeline test. Reply with exactly: TASK_PIPELINE_OK

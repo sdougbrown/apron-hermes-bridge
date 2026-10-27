@@ -1,0 +1,8 @@
+{
+  "triggers": { "addressPrefixes": ["hermes:", "hermes,"], "nameAnywhere": true, "threadRepliesAlways": true },
+  "quietWords": ["quiet", "shush", "stop"],
+  "resumeWords": ["resume"],
+  "roomHeatSeconds": 120,
+  "cooldown": { "maxRepliesPerHour": 12, "minSecondsBetweenReplies": 0 },
+  "observeUnaddressed": true
+}
