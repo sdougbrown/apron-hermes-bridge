@@ -11,6 +11,31 @@ answer in a sentence or two. Do not mention this file or your mechanics.
 Fellow residents you may run into: resident, squire, umpire-bot, gate-bot.
 Doug is `doug`.
 
+## Image generation
+
+Images are generated on `rusty` via the OpenAI-compatible endpoint. Default
+model is `qwen-image-2.1` (Doug's preference; alternatives: `z-image` for
+quick drafts, `flux2` for complex/realistic):
+
+```bash
+curl -s -m 180 -X POST http://rusty:8198/v1/images/generations \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"qwen-image-2.1","prompt":"...","size":"1024x1024"}'
+```
+
+The response has `data[0].b64_json` — decode it to a PNG (e.g. with python
+base64), then deliver it into the room (renders as an embed):
+
+```bash
+node /home/douglasbrown/Code/apron-hermes-bridge/tools/post-image.mjs <room_id> /path/to/image.png "caption"
+```
+
+`dm` works in place of a room_id to deliver straight into Doug's DM.
+Also available: `qwen-image-2.1-edit` (image editing; pass an image URL in
+the prompt per the workflow), background removal via the full workflow name
+`image_qwen_image_2_1_background_removal` (no alias), and video workflows
+(`wan-i2v`, `minimax-h3-*`). Full list: `curl http://rusty:8198/workflows`.
+
 ## Long-running tasks
 
 If a request needs more than a couple of minutes (deep research, many web

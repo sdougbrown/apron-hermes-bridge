@@ -21,6 +21,15 @@ Bridge that gives the Hermes agent a live persona in Doug's apron chat server
   result into the room itself via `tools/post.mjs`. The room persona is
   taught to use this from `room/AGENTS.md` (§ Long-running tasks); the
   bridge includes the room id in the reply prompt so it can.
+- `tools/post-image.mjs <room_id|dm> <image|url> [caption]` — upload-embed an
+  image into a room; `dm` = private hermes↔doug room (id cached in
+  `~/.local/state/apron-hermes-dm`). The standard way to deliver generated
+  images (see the Image generation section in `room/AGENTS.md`).
+- `tools/post.mjs` / `tools/post-image.mjs` honor `APRON_TOKEN_FILE` (and
+  `APRON_DM_CACHE`) so other personas — e.g. jeeves, the sandboxed family
+  agent — can reuse them with their own tokens.
+- `enroll-jeeves.cjs` — one-time enrollment for the family persona (token →
+  `/srv/data/bots/family/home/apron-jeeves.token`).
 - `hermes-apron.service` (systemd user unit, installed separately) runs the
   bridge: `systemctl --user status hermes-apron`.
 

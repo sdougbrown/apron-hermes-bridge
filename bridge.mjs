@@ -12,6 +12,7 @@
 //   BRIDGE_TIMEOUT_S   per-reply timeout, default 240
 import { spawn } from "node:child_process";
 import { Governor } from "./governor.mjs";
+import { shouldReply, isSilent, CircuitBreaker } from "./reply-safety.mjs";
 import { readFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,7 +35,7 @@ mkdirSync(ROOM_DIR, { recursive: true });
 // Shared silence-biased policy (same Governor the residents use).
 let POLICY = {};
 try { POLICY = JSON.parse(readFileSync(path.join(HERE, "governor.json"), "utf8")); } catch { /* defaults */ }
-const BOT_PEERS = ["umpire-bot", "gate-bot", "resident", "squire", "colt"];
+const BOT_PEERS = ["umpire-bot", "gate-bot", "resident", "squire", "colt", "jeeves"];
 const BOT_QUIET_START = env("BOT_QUIET_START", "") === "1";
 
 let ws = null;
@@ -42,6 +43,11 @@ let seq = 0;
 const pending = new Map();
 const myMessageIds = new Set();
 const gov = new Governor(POLICY, { self: SELF, bots: BOT_PEERS });
+// Independent outbound-post breaker (applies to agent replies AND deterministic
+// acks). State persists across restarts; a trip latches for BREAKER_RESET_MS.
+const BREAKER_RESET_MS = Number(env("BREAKER_RESET_MS", String(30 * 60 * 1000)));
+const breaker = new CircuitBreaker({ stateFile: path.join(HERE, "breaker-state.json"), resetMs: BREAKER_RESET_MS });
+if (breaker.tripped) console.log(`bridge: circuit breaker latched at boot (until ${new Date(breaker.trippedAt + BREAKER_RESET_MS).toISOString()})`);
 if (BOT_QUIET_START) {
   gov.quiet = true;
   gov.quietUntil = Infinity;
@@ -85,10 +91,16 @@ function askHermes(prompt) {
 }
 
 async function postReply(roomId, replyTo, text) {
+  // Every outbound path — model replies and deterministic acknowledgments —
+  // goes through the breaker. No allow, no post.
+  if (!breaker.allow()) {
+    console.log(`bridge: breaker open, suppressed post to ${roomId}`);
+    return;
+  }
   const posted = await request("message", {
     room_id: roomId,
     ...(replyTo !== undefined ? { reply_to: { message_id: replyTo } } : {}),
-    body: { text, format: "plain" },
+    body: { text, format: "markdown" },
   });
   if (posted.message_id) myMessageIds.add(posted.message_id);
 }
@@ -130,13 +142,27 @@ async function handle(m) {
     `${from} has addressed you and is waiting for a reply: "${m.text}"`,
     `(You are in room id ${m.room ?? lastRoom} — needed for the spawn-task tool.)`,
     `Reply with only the message to post in the room — concise and casual, no preamble, no quotes around it. Plain text.`,
+    `If no reply is actually warranted, reply with exactly [SILENT] (and nothing else) — the bridge will not post it, but the conversation stays in your memory.`,
   ].join("\n");
 
   console.log(`bridge: replying to ${from} (${m.message_id})`);
+  // Fail-closed decision gate: only send to the agent when the sender is
+  // explicitly asking us to respond. Bots chatting among themselves (ack
+  // storms, cross-talk) never are. On gate failure we still keep the room
+  // context — the message is already in `recent`.
+  const gate = await shouldReply({ text: m.text, self: SELF, from });
+  if (!gate) {
+    console.log(`bridge: decision gate declined reply to ${from} (${m.message_id})`);
+    return;
+  }
   queue = queue.then(async () => {
     const { text: out, error } = await askHermes(prompt);
     if (error || !out) {
       console.error(`bridge: hermes failed: ${error || "empty reply"}`);
+      return;
+    }
+    if (isSilent(out)) {
+      console.log(`bridge: hermes chose silence (${m.message_id})`);
       return;
     }
     try { await postReply(m.room ?? lastRoom, m.message_id, out); }

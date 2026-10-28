@@ -48,14 +48,15 @@ export class Governor {
     const isAddressed = startsAddress || isThread || atMention;
 
     const quietWord = (this.policy.quietWords || []).find((w) => lower.includes(w));
-    if (quietWord && (startsAddress || isThread || nameMention)) {
+    if (!this.bots.has(from) && quietWord && (startsAddress || isThread || nameMention)) {
+      if (this.quiet) return { action: "observe", reason: "quiet" };
       this.quiet = true;
       this.quietUntil = Date.now() + this.quietHours * 60 * 60 * 1000;
       return { action: "quiet", word: quietWord };
     }
     if (this.quiet) {
       const resume = (this.policy.resumeWords || []).some((w) => lower.includes(w));
-      if (resume && (startsAddress || isThread)) {
+      if (!this.bots.has(from) && resume && (startsAddress || isThread)) {
         this.quiet = false;
         this.quietUntil = Infinity;
         return { action: "resumed" };
