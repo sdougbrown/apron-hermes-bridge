@@ -59,7 +59,9 @@ const recent = []; // last N room messages for context: {from, text}
 
 function request(method, params) {
   return new Promise((resolve, reject) => {
-    const id = `br-${++seq}`;
+    // Unique across process restarts: the server dedupes request ids globally,
+    // so a plain per-boot counter collides with ids an earlier connection used.
+    const id = `br-${process.pid.toString(36)}-${Date.now().toString(36)}-${++seq}`;
     pending.set(id, { resolve, reject });
     ws.send(JSON.stringify({ id, method, params }));
     setTimeout(() => { if (pending.delete(id)) reject(new Error(method + ": timed out")); }, 15000);
