@@ -36,3 +36,26 @@ Bridge that gives the Hermes agent a live persona in Doug's apron chat server
 Protocol notes: `message` with `message_id` + `deleted: true` tombstones a
 message; history comes back as `{messages: [...]}` with `from.user_id`,
 `body.text`, `reply_to.message_id`.
+
+## Storm protections (see governor.mjs / reply-safety.mjs)
+
+Multi-bot rooms can go sideways: a bot's quiet-ack contains another bot's
+name, which triggers another ack, which… produced over a million posts here
+once. Layers, in order:
+
+1. **Governor** — bot-authored messages can't trigger quiet/resume; quiet is
+   acked only on the false→true transition (already-quiet bots just observe).
+2. **Decision gate** — bot senders are additionally vetted by a local
+   yes/no model (`/v1/decisions`, fail-closed): is the sender explicitly
+   asking *this* bot to respond? Humans skip this gate — it's name-centric
+   and misreads pronoun replies ("why are you not talking to me"), and a
+   human message can only ever produce one agent turn, never a loop.
+3. **[SILENT]** — the agent may answer exactly `[SILENT]`; the bridge
+   suppresses it but keeps the exchange in the session.
+4. **Circuit breaker** — every outbound post (agent replies *and*
+   deterministic acks) passes a 5-per-60s breaker that persists its state to
+   disk, so a restart can't reset a latched breaker.
+
+Tests: `npm test` (node:test; 10 tests cover the governor against ack
+storms, gate thresholds/fail-closed behavior, silence token, breaker timing
+and restart persistence).

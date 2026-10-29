@@ -7,16 +7,26 @@ import path from 'node:path';
 
 test('decision requires a confident yes and fails closed', async () => {
   const response = yes => async () => ({ ok: true, json: async () => ({ answers: { reply: { probabilities: { yes } } } }) });
-  assert.equal(await shouldReply({ text: 'hermes: hi', self: 'hermes', from: 'doug' }, { fetchImpl: response(0.95) }), true);
-  assert.equal(await shouldReply({ text: 'hi', self: 'hermes', from: 'doug' }, { fetchImpl: response(0.5) }), false);
+  assert.equal(await shouldReply({ text: 'hermes: hi', self: 'hermes', from: 'squire', isBot: true }, { fetchImpl: response(0.95) }), true);
+  assert.equal(await shouldReply({ text: 'hi', self: 'hermes', from: 'squire', isBot: true }, { fetchImpl: response(0.5) }), false);
   // exactly at threshold passes; below does not
-  assert.equal(await shouldReply({ text: 'hi', self: 'hermes', from: 'doug' }, { fetchImpl: response(0.9) }), true);
-  assert.equal(await shouldReply({ text: 'hi', self: 'hermes', from: 'doug' }, { fetchImpl: response(0.89) }), false);
+  assert.equal(await shouldReply({ text: 'hi', self: 'hermes', from: 'squire', isBot: true }, { fetchImpl: response(0.9) }), true);
+  assert.equal(await shouldReply({ text: 'hi', self: 'hermes', from: 'squire', isBot: true }, { fetchImpl: response(0.89) }), false);
 });
 
 test('decision gate is fail-closed when the decision service is down', async () => {
-  assert.equal(await shouldReply({ text: 'hermes: hi', self: 'hermes', from: 'doug' }, { fetchImpl: async () => { throw Error('offline'); } }), false);
-  assert.equal(await shouldReply({ text: 'hermes: hi', self: 'hermes', from: 'doug' }, { fetchImpl: async () => ({ ok: false, status: 500, json: async () => ({}) }) }), false);
+  assert.equal(await shouldReply({ text: 'hermes: hi', self: 'hermes', from: 'squire', isBot: true }, { fetchImpl: async () => { throw Error('offline'); } }), false);
+  assert.equal(await shouldReply({ text: 'hermes: hi', self: 'hermes', from: 'squire', isBot: true }, { fetchImpl: async () => ({ ok: false, status: 500, json: async () => ({}) }) }), false);
+});
+
+test('human senders bypass the gate — even pronoun-only messages (2026-10-28 regression)', async () => {
+  let calls = 0;
+  const countingFetch = async () => { calls += 1; return { ok: true, json: async () => ({ answers: { reply: { probabilities: { yes: 0 } } } }) }; };
+  // Gemma judged this 0.91 "no" because it names no bot — the human must still get through.
+  assert.equal(await shouldReply({ text: 'hey why are you not talking to me on apron lol', self: 'hermes', from: 'doug', isBot: false }, { fetchImpl: countingFetch }), true);
+  assert.equal(calls, 0);
+  // A failing decision service must not block a human either.
+  assert.equal(await shouldReply({ text: 'hermes: hi', self: 'hermes', from: 'doug', isBot: false }, { fetchImpl: async () => { throw Error('offline'); } }), true);
 });
 
 test('only a standalone silence token suppresses output', () => {

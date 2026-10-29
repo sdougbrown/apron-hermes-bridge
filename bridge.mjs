@@ -150,7 +150,7 @@ async function handle(m) {
   // explicitly asking us to respond. Bots chatting among themselves (ack
   // storms, cross-talk) never are. On gate failure we still keep the room
   // context — the message is already in `recent`.
-  const gate = await shouldReply({ text: m.text, self: SELF, from });
+  const gate = await shouldReply({ text: m.text, self: SELF, from, isBot: gov.bots.has(from) });
   if (!gate) {
     console.log(`bridge: decision gate declined reply to ${from} (${m.message_id})`);
     return;

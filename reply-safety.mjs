@@ -18,7 +18,14 @@ export function isSilent(text) {
   return text.trim() === '[SILENT]';
 }
 
-export async function shouldReply({ text, self, from }, { fetchImpl = fetch, url = 'http://grace:4000/v1/decisions', model = 'gemma4', threshold = 0.9 } = {}) {
+export async function shouldReply({ text, self, from, isBot = false }, { fetchImpl = fetch, url = 'http://grace:4000/v1/decisions', model = 'gemma4', threshold = 0.9 } = {}) {
+  // The gate exists to stop bot↔bot storms (ack exchanges, cross-talk). A human
+  // sender already passed the governor's addressing checks, and its message can
+  // only ever produce one agent turn — never a loop. The name-centric Gemma gate
+  // also misreads pronoun replies ("why are you not talking to me") as
+  // not-addressed, so vetting humans here just drops legit replies. Humans keep
+  // one safety layer: the agent itself can answer exactly [SILENT].
+  if (!isBot) return true;
   try {
     const response = await fetchImpl(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(5000),
