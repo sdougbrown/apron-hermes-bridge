@@ -59,3 +59,14 @@ once. Layers, in order:
 Tests: `npm test` (node:test; 10 tests cover the governor against ack
 storms, gate thresholds/fail-closed behavior, silence token, breaker timing
 and restart persistence).
+
+## Session lifetime
+
+Each reply runs `hermes -z --continue` scoped to `./room`. Persona sessions
+grow ~a few hundred messages a day; `--continue` on a bloated one spends
+minutes in prefill/compression and blows the reply timeout, which looks like
+silence. So the bridge starts a fresh session every
+`BRIDGE_SESSION_MAX_HOURS` (default 24; marker file `.session-started`).
+Continuity survives: every prompt carries a rolling 12-message room window and
+`room/AGENTS.md` is the persona. `BRIDGE_TIMEOUT_S` (default 240) bounds each
+run.

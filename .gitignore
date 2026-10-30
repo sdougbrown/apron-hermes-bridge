@@ -1,2 +1,3 @@
 node_modules/
 breaker-state.json
+.session-started

@@ -13,7 +13,7 @@
 import { spawn } from "node:child_process";
 import { Governor } from "./governor.mjs";
 import { shouldReply, isSilent, CircuitBreaker } from "./reply-safety.mjs";
-import { readFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
@@ -78,9 +78,29 @@ function isAddressed(m) {
   return atMention || startsAddress || threadReply || TRIGGER.test(m.text);
 }
 
+// Persona sessions grow a few hundred messages a day, and `--continue` on a
+// bloated session spent minutes on prefill/compression until every reply hit
+// the timeout and the bridge went silent. Bound the session's life: start a
+// fresh one after BRIDGE_SESSION_MAX_HOURS. Room continuity is not lost — every
+// prompt already carries a rolling 12-message window, and AGENTS.md is the
+// persona.
+const SESSION_MARKER = path.join(HERE, ".session-started");
+const SESSION_MAX_MS = Number(env("BRIDGE_SESSION_MAX_HOURS", "24")) * 3600 * 1000;
+
+function sessionIsFresh() {
+  try { return Date.now() - Number(readFileSync(SESSION_MARKER, "utf8")) < SESSION_MAX_MS; }
+  catch { return false; }
+}
+
 function askHermes(prompt) {
   return new Promise((resolve) => {
-    const child = spawn(HERMES_BIN, ["-z", prompt, "--continue"], {
+    const fresh = sessionIsFresh();
+    const args = fresh ? ["-z", prompt, "--continue"] : ["-z", prompt];
+    if (!fresh) {
+      try { writeFileSync(SESSION_MARKER, String(Date.now())); } catch { /* marker is best-effort */ }
+      console.log("bridge: starting a fresh persona session");
+    }
+    const child = spawn(HERMES_BIN, args, {
       cwd: ROOM_DIR, env: process.env,
     });
     let out = "", err = "";
