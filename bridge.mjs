@@ -84,7 +84,7 @@ function isAddressed(m) {
 // fresh one after BRIDGE_SESSION_MAX_HOURS. Room continuity is not lost — every
 // prompt already carries a rolling 12-message window, and AGENTS.md is the
 // persona.
-const SESSION_MARKER = path.join(HERE, ".session-started");
+const SESSION_MARKER = path.join(HERE, `.session-started-${SELF}`);
 const SESSION_MAX_MS = Number(env("BRIDGE_SESSION_MAX_HOURS", "24")) * 3600 * 1000;
 
 function sessionIsFresh() {
