@@ -13,6 +13,7 @@
 import { spawn } from "node:child_process";
 import { Governor } from "./governor.mjs";
 import { shouldReply, isSilent, CircuitBreaker } from "./reply-safety.mjs";
+import { walkChain, renderChain } from "./thread.mjs";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -127,6 +128,27 @@ async function postReply(roomId, replyTo, text) {
   if (posted.message_id) myMessageIds.add(posted.message_id);
 }
 
+async function threadChain(roomId, messageId) {
+  if (!roomId || !messageId) return [];
+  try {
+    let page = await request("history", { room_id: roomId, limit: 40 });
+    let messages = page.messages ?? [];
+    let { chain, missing } = walkChain(messages, messageId);
+    // The chain reaches past the fetched page — page once more, backwards.
+    for (let hops = 0; missing && hops < 3; hops += 1) {
+      const oldest = messages[0]?.log_id;
+      if (!oldest || !page.more) break;
+      page = await request("history", { room_id: roomId, limit: 200, before: oldest });
+      messages = [...(page.messages ?? []), ...messages];
+      ({ chain, missing } = walkChain(messages, messageId));
+    }
+    return chain;
+  } catch (e) {
+    console.error(`bridge: thread lookup failed: ${e.message}`);
+    return [];
+  }
+}
+
 async function handle(m) {
   const from = m.from;
   if (m.room) lastRoom = m.room;
@@ -156,13 +178,29 @@ async function handle(m) {
     .slice(-10)
     .map((r) => `${r.from}: ${r.text}`)
     .join("\n");
+  // The in-memory window only knows what happened since boot, so a bare
+  // "look into this" replying to a message from yesterday arrives with no
+  // antecedent. Fetch the room's recent history and hand the agent the reply
+  // chain of the message it is answering.
+  const chain = await threadChain(m.room ?? lastRoom, m.message_id);
+  const chainText = chain.length > 1
+    ? renderChain(chain)
+    : "(none — message is not a reply to anything older)";
   const prompt = [
     `You are Hermes, chatting in an apron chat room on Doug's homelab.`,
     `Recent room traffic (oldest first):`,
     context,
     ``,
+    `Thread you are answering, oldest first (from room history):`,
+    chainText,
+    ``,
     `${from} has addressed you and is waiting for a reply: "${m.text}"`,
-    `(You are in room id ${m.room ?? lastRoom} — needed for the spawn-task tool.)`,
+    `(You are in room id ${m.room ?? lastRoom}${m.message_id ? `, answering message ${m.message_id}` : ""} — needed for the spawn-task tool.)`,
+    `If the thread above does not resolve what "${(m.text ?? "").slice(0, 40)}" refers to, look it up rather than guessing:`,
+    `  node ${HERE}/tools/history.mjs <room_id> --limit 60            (room scrollback)`,
+    `  node ${HERE}/tools/history.mjs <room_id> --thread <message_id> (walk a reply chain)`,
+    `  node ${HERE}/tools/history.mjs <room_id> --json                (raw messages incl. attachments)`,
+    `You can also post follow-ups yourself: node ${HERE}/tools/post.mjs <room_id> "<text>" [reply_to_message_id].`,
     `Reply with only the message to post in the room — concise and casual, no preamble, no quotes around it. Plain text.`,
     `If no reply is actually warranted, reply with exactly [SILENT] (and nothing else) — the bridge will not post it, but the conversation stays in your memory.`,
   ].join("\n");

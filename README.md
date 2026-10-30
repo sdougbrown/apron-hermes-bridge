@@ -28,6 +28,11 @@ Bridge that gives the Hermes agent a live persona in Doug's apron chat server
 - `tools/post.mjs` / `tools/post-image.mjs` honor `APRON_TOKEN_FILE` (and
   `APRON_DM_CACHE`) so other personas — e.g. jeeves, the sandboxed family
   agent — can reuse them with their own tokens.
+- `tools/history.mjs <room_id> [--limit N] [--before ID] [--thread ID] [--json]`
+  reads room scrollback or walks a reply chain. Each reply prompt also carries
+  the trigger message's chain from `thread.mjs`, so a bare "look into this"
+  replying to a day-old message arrives with its antecedent instead of
+  context-free.
 - `enroll-jeeves.cjs` — one-time enrollment for the family persona (token →
   `/srv/data/bots/family/home/apron-jeeves.token`).
 - `hermes-apron.service` (systemd user unit, installed separately) runs the
