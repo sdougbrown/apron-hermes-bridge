@@ -1,3 +1,4 @@
 node_modules/
 breaker-state.json
 .session-started-*
+tasks/*/running
