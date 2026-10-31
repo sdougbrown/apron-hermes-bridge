@@ -105,7 +105,11 @@ function askHermes(prompt) {
       cwd: ROOM_DIR, env: process.env,
     });
     let out = "", err = "";
-    const timer = setTimeout(() => { child.kill("SIGKILL"); resolve({ text: null, error: "timed out" }); }, TIMEOUT_MS);
+    const startedAt = Date.now();
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve({ text: null, error: `timed out after ${Math.round((Date.now() - startedAt) / 1000)}s` });
+    }, TIMEOUT_MS);
     child.stdout.on("data", (d) => { out += d; });
     child.stderr.on("data", (d) => { err += d; });
     child.on("close", () => { clearTimeout(timer); resolve({ text: out.trim(), error: null }); });
@@ -184,7 +188,9 @@ async function handle(m) {
   // chain of the message it is answering.
   const chain = await threadChain(m.room ?? lastRoom, m.message_id);
   const chainText = chain.length > 1
-    ? renderChain(chain)
+    ? renderChain(chain.slice(-6)).split("\n")
+        .map((line) => (line.length > 700 ? line.slice(0, 700) + "…" : line))
+        .join("\n")
     : "(none — message is not a reply to anything older)";
   const prompt = [
     `You are Hermes, chatting in an apron chat room on Doug's homelab.`,
