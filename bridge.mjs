@@ -188,9 +188,7 @@ async function handle(m) {
   // chain of the message it is answering.
   const chain = await threadChain(m.room ?? lastRoom, m.message_id);
   const chainText = chain.length > 1
-    ? renderChain(chain.slice(-6)).split("\n")
-        .map((line) => (line.length > 700 ? line.slice(0, 700) + "…" : line))
-        .join("\n")
+    ? renderChain(chain)
     : "(none — message is not a reply to anything older)";
   const prompt = [
     `You are Hermes, chatting in an apron chat room on Doug's homelab.`,
