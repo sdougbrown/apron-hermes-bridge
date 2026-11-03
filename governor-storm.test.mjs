@@ -62,3 +62,25 @@ test('room heat still defers casual name mentions in human-to-human chatter', ()
   const d = gov.classify({ from: 'eileen', text: 'lol hermes would say that' });
   assert.equal(d.action, 'observe');
 });
+
+test('a DM room treats any human message as addressed — flat, no name, past the followup window', () => {
+  const gov = new Governor(policy, { self: 'hermes', bots: ['resident', 'squire', 'colt', 'jeeves'] });
+  const d = gov.classify({ from: 'doug', text: 'that was funny, were those raw calls?', dm: true });
+  assert.equal(d.action, 'reply');
+  // real reproduction: hours later, flat message in the DM room still lands
+  const realNow = Date.now; Date.now = () => realNow() + 3 * 3600 * 1000;
+  try { assert.equal(gov.classify({ from: 'doug', text: 'ok next question', dm: true }).action, 'reply'); }
+  finally { Date.now = realNow; }
+});
+
+test('DM quiet/resume works without a name', () => {
+  const gov = new Governor(policy, { self: 'hermes', bots: ['resident', 'squire', 'colt', 'jeeves'] });
+  assert.equal(gov.classify({ from: 'doug', text: 'quiet for a bit', dm: true }).action, 'quiet');
+  assert.equal(gov.classify({ from: 'doug', text: 'ok resume', dm: true }).action, 'resumed');
+});
+
+test('bot messages in a DM room do NOT become addressed (storm safety)', () => {
+  const gov = new Governor(policy, { self: 'hermes', bots: ['resident', 'squire', 'colt', 'jeeves'] });
+  const d = gov.classify({ from: 'resident', text: 'anything new over there?', dm: true });
+  assert.equal(d.action, 'observe');
+});

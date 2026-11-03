@@ -35,21 +35,24 @@ export class Governor {
   }
 
   /** Classify one message. The caller performs the action (observe = durable
-   * context write; reply = generate and post; quietAck/resumed = ack post). */
-  classify({ from, text, replyTo }) {
+   * context write; reply = generate and post; quietAck/resumed = ack post).
+   * `dm` marks a private two-person room: there, any human message is by
+   * definition addressed to the bot — no name or thread required. */
+  classify({ from, text, replyTo, dm = false }) {
     // Bot messages don't count as room heat: two residents exchanging replies
     // must not defer each other into silence.
     if (!this.bots.has(from)) this.lastHumanMessageAt = Date.now();
     const isThread = replyTo !== undefined && replyTo !== null && !this.bots.has(from);
+    const dmAddressed = dm && !this.bots.has(from);
     const lower = (text || "").toLowerCase();
     const atMention = lower.includes(`@${this.self}`);
     const startsAddress = (this.policy.triggers?.addressPrefixes || [`${this.self}:`, `${this.self},`])
       .some((p) => lower.startsWith(p));
     const nameMention = (this.policy.triggers?.nameAnywhere ?? true) && this.trigger.test(text);
-    const isAddressed = startsAddress || isThread || atMention;
+    const isAddressed = startsAddress || isThread || atMention || dmAddressed;
 
     const quietWord = (this.policy.quietWords || []).find((w) => lower.includes(w));
-    if (!this.bots.has(from) && quietWord && (startsAddress || isThread || nameMention)) {
+    if (!this.bots.has(from) && quietWord && (isAddressed || nameMention)) {
       if (this.quiet) return { action: "observe", reason: "quiet" };
       this.quiet = true;
       this.quietUntil = Date.now() + this.quietHours * 60 * 60 * 1000;
@@ -57,7 +60,7 @@ export class Governor {
     }
     if (this.quiet) {
       const resume = (this.policy.resumeWords || []).some((w) => lower.includes(w));
-      if (!this.bots.has(from) && resume && (startsAddress || isThread)) {
+      if (!this.bots.has(from) && resume && (startsAddress || isThread || dmAddressed)) {
         this.quiet = false;
         this.quietUntil = Infinity;
         return { action: "resumed" };

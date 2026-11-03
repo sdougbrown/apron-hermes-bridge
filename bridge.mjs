@@ -57,6 +57,19 @@ if (BOT_QUIET_START) {
 let lastRoom = ROOMS[0];
 let queue = Promise.resolve(); // serialize hermes runs
 const recent = []; // last N room messages for context: {from, text}
+const dmRooms = new Set(); // private 2-person rooms: any human message is a DM
+
+async function loadDmRooms() {
+  try {
+    const joined = await request("room_list", { filter: "joined", members: true });
+    for (const room of joined.joined || []) {
+      if (room.private && (room.members || []).length === 2) dmRooms.add(room.room_id);
+    }
+    console.log(`bridge: dm rooms: ${[...dmRooms].join(", ") || "(none)"}`);
+  } catch (e) {
+    console.error(`bridge: room_list failed: ${e.message}`);
+  }
+}
 
 function request(method, params) {
   return new Promise((resolve, reject) => {
@@ -163,7 +176,7 @@ async function handle(m) {
   }
   if (!from || from === SELF) return;
 
-  const d = gov.classify({ from, text: m.text, replyTo: m.reply_to ?? null });
+  const d = gov.classify({ from, text: m.text, replyTo: m.reply_to ?? null, dm: dmRooms.has(m.room) });
   if (d.action === "quiet") {
     console.log(`bridge: quiet until resumed (triggered by ${from})`);
     await postReply(m.room, m.message_id, `Going quiet. Say "${SELF} resume" to bring me back.`);
@@ -239,6 +252,7 @@ function connect() {
   ws.on("open", async () => {
     try {
       await request("auth", { scheme: "token", token: TOKEN, agent: "bridge/0" });
+      await loadDmRooms();
       for (const room of ROOMS) await request("room_join", { room_id: room });
       for (const room of ROOMS) {
         const h = await request("history", { room_id: room, limit: 200 });
