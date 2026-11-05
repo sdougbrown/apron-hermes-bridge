@@ -6,12 +6,27 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 test('decision requires a confident yes and fails closed', async () => {
-  const response = yes => async () => ({ ok: true, json: async () => ({ answers: { reply: { probabilities: { yes } } } }) });
+  // 2026-11 contract: answers is a LIST of {name, probability}
+  const response = p => async () => ({ ok: true, json: async () => ({ answers: [{ name: 'reply', type: 'predicate', probability: p }] }) });
   assert.equal(await shouldReply({ text: 'hermes: hi', self: 'hermes', from: 'squire', isBot: true }, { fetchImpl: response(0.95) }), true);
   assert.equal(await shouldReply({ text: 'hi', self: 'hermes', from: 'squire', isBot: true }, { fetchImpl: response(0.5) }), false);
   // exactly at threshold passes; below does not
   assert.equal(await shouldReply({ text: 'hi', self: 'hermes', from: 'squire', isBot: true }, { fetchImpl: response(0.9) }), true);
   assert.equal(await shouldReply({ text: 'hi', self: 'hermes', from: 'squire', isBot: true }, { fetchImpl: response(0.89) }), false);
+  // the request must use the new predicate schema
+  let sent;
+  await shouldReply({ text: 'hi', self: 'hermes', from: 'squire', isBot: true }, { fetchImpl: async (url, opts) => { sent = JSON.parse(opts.body); return { ok: true, json: async () => ({ answers: [{ name: 'reply', probability: 1 }] }) }; } });
+  assert.equal(sent.questions[0].type, 'predicate');
+  assert.equal(sent.questions[0].name, 'reply');
+  assert.ok(sent.questions[0].instructions.includes('hermes'));
+  assert.ok(!('id' in sent.questions[0]));
+});
+
+test('thread context rides along in the gate input', async () => {
+  let sent;
+  await shouldReply({ text: 'have a look at it', self: 'hermes', from: 'doug', isBot: true, context: 'hermes: Looked through it — yes, it has legs.' }, { fetchImpl: async (url, opts) => { sent = JSON.parse(opts.body); return { ok: true, json: async () => ({ answers: [{ name: 'reply', probability: 0.95 }] }) }; } });
+  assert.ok(sent.input.includes('Thread context:'));
+  assert.ok(sent.input.includes('Looked through it'));
 });
 
 test('decision gate is fail-closed when the decision service is down', async () => {

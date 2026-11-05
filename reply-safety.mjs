@@ -18,7 +18,7 @@ export function isSilent(text) {
   return text.trim() === '[SILENT]';
 }
 
-export async function shouldReply({ text, self, from, isBot = false }, { fetchImpl = fetch, url = 'http://grace:4000/v1/decisions', model = 'gemma4', threshold = 0.9 } = {}) {
+export async function shouldReply({ text, self, from, isBot = false, context = '' }, { fetchImpl = fetch, url = 'http://grace:4000/v1/decisions', model = 'gemma4', threshold = 0.9 } = {}) {
   // The gate exists to stop bot↔bot storms (ack exchanges, cross-talk). A human
   // sender already passed the governor's addressing checks, and its message can
   // only ever produce one agent turn — never a loop. The name-centric Gemma gate
@@ -26,15 +26,19 @@ export async function shouldReply({ text, self, from, isBot = false }, { fetchIm
   // not-addressed, so vetting humans here just drops legit replies. Humans keep
   // one safety layer: the agent itself can answer exactly [SILENT].
   if (!isBot) return true;
+  // 2026-11 decisions contract: predicate questions are
+  // {type:'predicate', name, instructions} and answers come back as a LIST of
+  // {name, probability} — the old yes_no/{probabilities:{yes,no}} shape 422s now.
+  const input = [`Sender: ${from}`, `Message: ${text}`, context ? `Thread context:\n${context}` : ''].filter(Boolean).join('\n');
   try {
     const response = await fetchImpl(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(5000),
-      body: JSON.stringify({ model, input: `Bot: ${self}\nSender: ${from}\nMessage: ${text}`, questions: [{ id: 'reply', type: 'yes_no', question: 'Is the sender explicitly asking this bot to respond or perform a task? Yes means the message directly addresses the bot and requests a response or action. No means it is an observation, acknowledgment, conversation with someone else, or ambiguous.' }] }),
+      body: JSON.stringify({ model, input, questions: [{ type: 'predicate', name: 'reply', instructions: `Is this chat message directed at ${self} — the sender is talking to ${self}, addressing ${self}, or asking ${self} for something? True if the message is meant for ${self}. False if the sender is talking to someone else or to no one in particular.` }] }),
     });
     if (!response.ok) return false;
     const result = await response.json();
-    const yes = result?.answers?.reply?.probabilities?.yes;
-    return typeof yes === 'number' && Number.isFinite(yes) && yes >= threshold;
+    const answer = (result?.answers ?? []).find((a) => a.name === 'reply');
+    return typeof answer?.probability === 'number' && Number.isFinite(answer.probability) && answer.probability >= threshold;
   } catch { return false; }
 }
 
