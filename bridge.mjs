@@ -58,12 +58,20 @@ let lastRoom = ROOMS[0];
 let queue = Promise.resolve(); // serialize hermes runs
 const recent = []; // last N room messages for context: {from, text}
 const dmRooms = new Set(); // private 2-person rooms: any human message is a DM
+const allowedRooms = new Set(ROOMS); // resolved ids/names of configured rooms
 
 async function loadDmRooms() {
   try {
     const joined = await request("room_list", { filter: "joined", members: true });
     for (const room of joined.joined || []) {
       if (room.private && (room.members || []).length === 2) dmRooms.add(room.room_id);
+      // The server pushes messages for every room this user can see, not
+      // just the ones we joined — resolve our configured rooms' ids so the
+      // feed filter below can match them (ROOMS entries may be names or ids).
+      if (ROOMS.includes(room.room_id) || ROOMS.includes(room.name)) {
+        if (room.room_id) allowedRooms.add(room.room_id);
+        if (room.name) allowedRooms.add(room.name);
+      }
     }
     console.log(`bridge: dm rooms: ${[...dmRooms].join(", ") || "(none)"}`);
   } catch (e) {
@@ -278,6 +286,9 @@ function connect() {
     if (f.method === "message" && f.params) {
       const m = f.params.message || f.params;
       if (!m.message_id) return;
+      // The server pushes every room this user can see — only react to the
+      // rooms this persona is configured for (APRON_ROOMS, resolved to ids).
+      if (!allowedRooms.has(m.room_id)) return;
       handle({
         from: m.from && m.from.user_id,
         reply_to: m.reply_to && m.reply_to.message_id,
