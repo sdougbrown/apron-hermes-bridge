@@ -226,7 +226,8 @@ async function handle(m) {
     `  node ${HERE}/tools/history.mjs <room_id> --limit 60            (room scrollback)`,
     `  node ${HERE}/tools/history.mjs <room_id> --thread <message_id> (walk a reply chain)`,
     `  node ${HERE}/tools/history.mjs <room_id> --json                (raw messages incl. attachments)`,
-    `You can also post follow-ups yourself: node ${HERE}/tools/post.mjs <room_id> "<text>" [reply_to_message_id].`,
+    `Do NOT post messages yourself (no post.mjs for your reply) — the bridge posts your stdout text for you; posting yourself too causes duplicates.`,
+    `If a long task needs progress updates after you reply, spawn a background task and let IT post follow-ups.`,
     `Reply with only the message to post in the room — concise and casual, no preamble, no quotes around it. Plain text.`,
     `If no reply is actually warranted, reply with exactly [SILENT] (and nothing else) — the bridge will not post it, but the conversation stays in your memory.`,
   ].join("\n");
@@ -251,9 +252,32 @@ async function handle(m) {
       console.log(`bridge: hermes chose silence (${m.message_id})`);
       return;
     }
+    // Dedupe guard: the agent may have posted its own reply via post.mjs
+    // (learned habit / spawned task). If a message from us already answers
+    // this message, don't post the stdout copy on top of it.
+    if (await alreadyReplied(m.room ?? lastRoom, m.message_id)) {
+      console.log(`bridge: dedup — reply to ${m.message_id} already posted, skipping stdout copy`);
+      return;
+    }
     try { await postReply(m.room ?? lastRoom, m.message_id, out); }
     catch (e) { console.error(`bridge: post failed: ${e.message}`); }
   });
+}
+
+async function alreadyReplied(roomId, messageId) {
+  if (!messageId) return false;
+  try {
+    const h = await request("history", { room_id: roomId, limit: 15 });
+    const cutoff = Date.now() - 5 * 60 * 1000;
+    return (h.messages ?? []).some(
+      (msg) => msg.from && msg.from.user_id === SELF && !msg.deleted
+        && msg.reply_to && msg.reply_to.message_id === messageId
+        && msg.log_id && msg.log_id > cutoff,
+    );
+  } catch (e) {
+    console.error(`bridge: dedupe check failed: ${e.message}`);
+    return false; // fail open — better a rare duplicate than a dropped reply
+  }
 }
 
 function connect() {
