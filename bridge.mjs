@@ -64,11 +64,12 @@ async function loadDmRooms() {
   try {
     const joined = await request("room_list", { filter: "joined", members: true });
     for (const room of joined.joined || []) {
-      if (room.private && (room.members || []).length === 2) dmRooms.add(room.room_id);
-      // The server pushes messages for every room this user can see, not
-      // just the ones we joined — resolve our configured rooms' ids so the
-      // feed filter below can match them (ROOMS entries may be names or ids).
-      if (ROOMS.includes(room.room_id) || ROOMS.includes(room.name)) {
+      if (room.private && (room.members || []).length === 2) {
+        dmRooms.add(room.room_id);
+        // DMs always pass the room filter: any human message in a private
+        // 2-person room is addressed by definition.
+        allowedRooms.add(room.room_id);
+      } else if (ROOMS.includes(room.room_id) || ROOMS.includes(room.name)) {
         if (room.room_id) allowedRooms.add(room.room_id);
         if (room.name) allowedRooms.add(room.name);
       }
