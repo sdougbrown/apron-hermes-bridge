@@ -1,22 +1,27 @@
-// Governor — silence-biased reply policy for chat residents.
+// Governor — structure-only wake policy for chat residents.
 // Extracted from apron-resident/bot.mjs so other bots (hermes, …) reuse it.
 // The policy is data (governor.json shape below); the governor holds the
-// mutable state (quiet, cooldown window, heat timer) and classifies each
-// incoming message.
+// mutable state (quiet, cooldown window) and classifies each incoming
+// message.
+//
+// STRUCTURE WAKES, THE JUDGE DECIDES THE REST. A message wakes the bot only
+// through a hard signal — direct address prefix, @-mention, name mention
+// (deliberate: the room router depends on name-anywhere), a reply to the
+// bot's own message, or a DM. Whether unaddressed room chatter is "for" the
+// bot is intent, and intent is judged by the room router's model decision —
+// never by windows, heat, or reply-shape heuristics here. Silence is the
+// default; the only gates kept are storm valves (hourly cap, min spacing).
 //
 //   const gov = new Governor(policy, { self: "resident", bots: ["squire", "gate-bot", "umpire-bot"] });
-//   const d = gov.classify({ from: "doug", text: "resident: hi", replyTo: null });
-//   // d = { action: "reply" | "observe", reason?: "room-heat" | "cooldown cap" | "min spacing" | "quiet" | "first run" }
+//   const d = gov.classify({ from: "doug", text: "resident: hi", replyTo: null, replyToMine: false, dm: false });
+//   // d = { action: "reply" | "observe", reason?: "cooldown cap" | "min spacing" | "quiet" | "bot traffic" }
 //
-// Policy shape (all keys optional; defaults shown in governor.json):
+// Policy shape (all keys optional):
 // {
-//   triggers: { addressPrefixes: ["resident:", "resident,"], nameAnywhere: true,
-//               threadRepliesAlways: true },
+//   triggers: { addressPrefixes: ["resident:", "resident,"], nameAnywhere: true },
 //   quietWords: ["quiet", "shush", "stop"],
 //   resumeWords: ["resume"],
-//   roomHeatSeconds: 120,
-//   cooldown: { maxRepliesPerHour: 12, minSecondsBetweenReplies: 0 },
-//   observeUnaddressed: true
+//   cooldown: { maxRepliesPerHour: 12, minSecondsBetweenReplies: 0 }
 // }
 
 export class Governor {
@@ -26,91 +31,62 @@ export class Governor {
     this.bots = new Set([self, ...bots]);
     this.quietHours = quietHours;
     this.replyTimes = [];
-    this.lastHumanMessageAt = 0;
     this.lastBotMessageAt = 0;
-    this.lastBotReplyAt = 0;
     this.quiet = false;
-    this.quietUntil = Infinity;
     this.trigger = new RegExp(`\\b${self}\\b`, "i");
   }
 
   /** Classify one message. The caller performs the action (observe = durable
    * context write; reply = generate and post; quietAck/resumed = ack post).
-   * `dm` marks a private two-person room: there, any human message is by
-   * definition addressed to the bot — no name or thread required. */
+   * `replyToMine` says whether `replyTo` targets one of OUR messages (the
+   * caller resolves authorship from room history — never guess it here).
+   * `dm` marks a private two-person room: any human message there is by
+   * definition addressed — no name or thread required. */
   classify({ from, text, replyTo, replyToMine = false, dm = false }) {
-    // Bot messages don't count as room heat: two residents exchanging replies
-    // must not defer each other into silence.
-    if (!this.bots.has(from)) this.lastHumanMessageAt = Date.now();
-    const dmAddressed = dm && !this.bots.has(from);
+    const isBot = this.bots.has(from);
     const lower = (text || "").toLowerCase();
     const atMention = lower.includes(`@${this.self}`);
     const startsAddress = (this.policy.triggers?.addressPrefixes || [`${this.self}:`, `${this.self},`])
       .some((p) => lower.startsWith(p));
     const nameMention = (this.policy.triggers?.nameAnywhere ?? true) && this.trigger.test(text);
-    // A thread reply is addressed to ME only when it replies to MY message —
-    // in a multi-bot room a reply to another resident's message is theirs.
+    // In a multi-bot room a reply to another resident's message is theirs.
     const isThread = replyTo !== undefined && replyTo !== null && replyToMine === true;
-    const isAddressed = startsAddress || isThread || atMention || dmAddressed;
+    const dmAddressed = dm && !isBot;
+    const isAddressed = startsAddress || atMention || isThread || dmAddressed;
 
+    // Quiet/resume are explicit control words, honored from humans only.
     const quietWord = (this.policy.quietWords || []).find((w) => lower.includes(w));
-    if (!this.bots.has(from) && quietWord && (isAddressed || nameMention)) {
+    if (!isBot && quietWord && (isAddressed || nameMention)) {
       if (this.quiet) return { action: "observe", reason: "quiet" };
       this.quiet = true;
-      this.quietUntil = Date.now() + this.quietHours * 60 * 60 * 1000;
       return { action: "quiet", word: quietWord };
     }
     if (this.quiet) {
       const resume = (this.policy.resumeWords || []).some((w) => lower.includes(w));
-      if (!this.bots.has(from) && resume && (startsAddress || isThread || dmAddressed)) {
+      if (!isBot && resume && (startsAddress || isThread || dmAddressed)) {
         this.quiet = false;
-        this.quietUntil = Infinity;
         return { action: "resumed" };
       }
       return { action: "observe", reason: "quiet" };
     }
 
-    if (!isAddressed && !nameMention) {
-      // Continuation: a human replying within a few minutes of the bot's last
-      // reply is still in conversation with it, even without a name. Bots are
-      // excluded — unaddressed bot chatter must stay silent (storm safety).
-      // A message @-addressing someone else is never a continuation: it is
-      // aimed at that party, and interjecting steps on their turn.
-      const mentionsOther = ((text || "").match(/@([a-zA-Z0-9_.-]+)/g) || [])
-        .some((t) => t.slice(1).toLowerCase() !== this.self);
-      if (!this.bots.has(from) && !mentionsOther &&
-          Date.now() - this.lastBotReplyAt < (this.policy.followupSeconds ?? 300) * 1000) {
-        return this.#gate("followup");
-      }
-      return { action: "observe" };
-    }
-    return this.#gate(isAddressed ? "addressed" : "name-mention");
+    if (isBot && !isAddressed) return { action: "observe", reason: "bot traffic" };
+    if (!isAddressed && !nameMention) return { action: "observe" };
+    return this.#gate();
   }
 
-  /** Heat + cooldown gates shared by addressed messages and followups. */
-  #gate(reason) {
-    // Gate 1: room heat — a casual name-mention right after human-to-human
-    // traffic defers. Skipped when the bot itself is in an active exchange:
-    // rapid back-and-forth with the bot is the point of a direct chat, and
-    // the "human traffic" is just that conversation.
-    const heatWindow = (this.policy.roomHeatSeconds ?? 120) * 1000;
-    if (reason === "name-mention" &&
-        Date.now() - this.lastHumanMessageAt < heatWindow &&
-        Date.now() - this.lastBotReplyAt > heatWindow) {
-      return { action: "observe", reason: "room-heat" };
-    }
-    // Gate 2: cooldown — sliding hourly cap + minimum spacing.
-    const now2 = Date.now();
-    while (this.replyTimes.length && now2 - this.replyTimes[0] > 60 * 60 * 1000) this.replyTimes.shift();
+  /** Storm valves only — no intent heuristics. */
+  #gate() {
+    const now = Date.now();
+    while (this.replyTimes.length && now - this.replyTimes[0] > 60 * 60 * 1000) this.replyTimes.shift();
     if (this.replyTimes.length >= (this.policy.cooldown?.maxRepliesPerHour ?? 12)) {
       return { action: "observe", reason: "cooldown cap" };
     }
-    if (now2 - this.lastBotMessageAt < (this.policy.cooldown?.minSecondsBetweenReplies ?? 0) * 1000) {
+    if (now - this.lastBotMessageAt < (this.policy.cooldown?.minSecondsBetweenReplies ?? 0) * 1000) {
       return { action: "observe", reason: "min spacing" };
     }
-    this.replyTimes.push(now2);
-    this.lastBotReplyAt = now2;
-    this.lastBotMessageAt = now2;
+    this.replyTimes.push(now);
+    this.lastBotMessageAt = now;
     return { action: "reply" };
   }
 

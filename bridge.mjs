@@ -51,7 +51,6 @@ const breaker = new CircuitBreaker({ stateFile: path.join(HERE, "breaker-state.j
 if (breaker.tripped) console.log(`bridge: circuit breaker latched at boot (until ${new Date(breaker.trippedAt + BREAKER_RESET_MS).toISOString()})`);
 if (BOT_QUIET_START) {
   gov.quiet = true;
-  gov.quietUntil = Infinity;
   console.log("governor: starting quiet (BOT_QUIET_START=1) — resume via chat");
 }
 let lastRoom = ROOMS[0];
