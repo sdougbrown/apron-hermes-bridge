@@ -185,7 +185,11 @@ async function handle(m) {
   }
   if (!from || from === SELF) return;
 
-  const d = gov.classify({ from, text: m.text, replyTo: m.reply_to ?? null, replyToMine: m.reply_to !== undefined && myMessageIds.has(m.reply_to), dm: dmRooms.has(m.room) });
+  // Thread-reply ownership: myMessageIds is in-memory and can miss ids from
+  // before a restart; the room history is the durable authorship record.
+  const replyToMine = m.reply_to != null
+    && (myMessageIds.has(String(m.reply_to)) || await replyTargetAuthor(m.room, m.reply_to) === SELF);
+  const d = gov.classify({ from, text: m.text, replyTo: m.reply_to ?? null, replyToMine, dm: dmRooms.has(m.room) });
   if (d.action === "quiet") {
     console.log(`bridge: quiet until resumed (triggered by ${from})`);
     await postReply(m.room, m.message_id, `Going quiet. Say "${SELF} resume" to bring me back.`);
@@ -264,6 +268,15 @@ async function handle(m) {
     try { await postReply(m.room ?? lastRoom, m.message_id, out); }
     catch (e) { console.error(`bridge: post failed: ${e.message}`); }
   });
+}
+
+// Author of a message id, resolved from recent room history (null if unknown).
+async function replyTargetAuthor(roomId, messageId) {
+  try {
+    const h = await request("history", { room_id: roomId, limit: 30 });
+    const target = (h.messages ?? []).find((x) => String(x.message_id) === String(messageId));
+    return target && target.from && target.from.user_id;
+  } catch { return null; }
 }
 
 async function alreadyReplied(roomId, messageId) {
