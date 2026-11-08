@@ -185,7 +185,7 @@ async function handle(m) {
   }
   if (!from || from === SELF) return;
 
-  const d = gov.classify({ from, text: m.text, replyTo: m.reply_to ?? null, dm: dmRooms.has(m.room) });
+  const d = gov.classify({ from, text: m.text, replyTo: m.reply_to ?? null, replyToMine: m.reply_to !== undefined && myMessageIds.has(m.reply_to), dm: dmRooms.has(m.room) });
   if (d.action === "quiet") {
     console.log(`bridge: quiet until resumed (triggered by ${from})`);
     await postReply(m.room, m.message_id, `Going quiet. Say "${SELF} resume" to bring me back.`);

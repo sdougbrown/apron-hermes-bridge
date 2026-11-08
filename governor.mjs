@@ -38,17 +38,19 @@ export class Governor {
    * context write; reply = generate and post; quietAck/resumed = ack post).
    * `dm` marks a private two-person room: there, any human message is by
    * definition addressed to the bot — no name or thread required. */
-  classify({ from, text, replyTo, dm = false }) {
+  classify({ from, text, replyTo, replyToMine = false, dm = false }) {
     // Bot messages don't count as room heat: two residents exchanging replies
     // must not defer each other into silence.
     if (!this.bots.has(from)) this.lastHumanMessageAt = Date.now();
-    const isThread = replyTo !== undefined && replyTo !== null && !this.bots.has(from);
     const dmAddressed = dm && !this.bots.has(from);
     const lower = (text || "").toLowerCase();
     const atMention = lower.includes(`@${this.self}`);
     const startsAddress = (this.policy.triggers?.addressPrefixes || [`${this.self}:`, `${this.self},`])
       .some((p) => lower.startsWith(p));
     const nameMention = (this.policy.triggers?.nameAnywhere ?? true) && this.trigger.test(text);
+    // A thread reply is addressed to ME only when it replies to MY message —
+    // in a multi-bot room a reply to another resident's message is theirs.
+    const isThread = replyTo !== undefined && replyTo !== null && replyToMine === true;
     const isAddressed = startsAddress || isThread || atMention || dmAddressed;
 
     const quietWord = (this.policy.quietWords || []).find((w) => lower.includes(w));
