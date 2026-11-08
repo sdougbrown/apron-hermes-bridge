@@ -248,7 +248,9 @@ async function handle(m) {
       console.error(`bridge: hermes failed: ${error || "empty reply"}`);
       return;
     }
-    if (isSilent(out)) {
+    if (isSilent(out) || /The model returned only a silence marker/.test(out)) {
+      // The Hermes CLI wraps its own silence decision in this warning; the
+      // right response to silence is silence, not a nag posted into the room.
       console.log(`bridge: hermes chose silence (${m.message_id})`);
       return;
     }
