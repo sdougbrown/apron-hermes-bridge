@@ -72,7 +72,12 @@ export class Governor {
       // Continuation: a human replying within a few minutes of the bot's last
       // reply is still in conversation with it, even without a name. Bots are
       // excluded — unaddressed bot chatter must stay silent (storm safety).
-      if (!this.bots.has(from) && Date.now() - this.lastBotReplyAt < (this.policy.followupSeconds ?? 300) * 1000) {
+      // A message @-addressing someone else is never a continuation: it is
+      // aimed at that party, and interjecting steps on their turn.
+      const mentionsOther = ((text || "").match(/@([a-zA-Z0-9_.-]+)/g) || [])
+        .some((t) => t.slice(1).toLowerCase() !== this.self);
+      if (!this.bots.has(from) && !mentionsOther &&
+          Date.now() - this.lastBotReplyAt < (this.policy.followupSeconds ?? 300) * 1000) {
         return this.#gate("followup");
       }
       return { action: "observe" };

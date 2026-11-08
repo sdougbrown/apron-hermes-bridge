@@ -24,7 +24,7 @@ ws.on("open", async () => {
     const r = await req("message", {
       room_id: room,
       ...(replyTo ? { reply_to: { message_id: replyTo } } : {}),
-      body: { text, format: "plain" },
+      body: { text, format: "markdown" },
     });
     console.log("posted", r.message_id);
   } catch (e) { console.error("post failed:", e.message); process.exitCode = 1; }
