@@ -36,7 +36,7 @@ mkdirSync(ROOM_DIR, { recursive: true });
 // Shared silence-biased policy (same Governor the residents use).
 let POLICY = {};
 try { POLICY = JSON.parse(readFileSync(path.join(HERE, "governor.json"), "utf8")); } catch { /* defaults */ }
-const BOT_PEERS = ["umpire-bot", "gate-bot", "resident", "squire", "colt", "jeeves"];
+const BOT_PEERS = ["umpire-bot", "gate-bot", "resident", "squire", "colt", "jeeves", "intern", "dream-bot", "service"];
 const BOT_QUIET_START = env("BOT_QUIET_START", "") === "1";
 
 let ws = null;
