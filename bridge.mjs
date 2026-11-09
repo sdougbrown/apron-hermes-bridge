@@ -116,25 +116,43 @@ function sessionIsFresh() {
 
 function askHermes(prompt) {
   return new Promise((resolve) => {
-    const fresh = sessionIsFresh();
-    const args = fresh ? ["-z", prompt, "--continue"] : ["-z", prompt];
-    if (!fresh) {
-      try { writeFileSync(SESSION_MARKER, String(Date.now())); } catch { /* marker is best-effort */ }
-      console.log("bridge: starting a fresh persona session");
+    (async () => {
+      const first = await runOnce();
+      if (first.error || !first.text) {
+        // Transient CLI blips (empty stdout, one-off errors) must not eat a
+        // wake — retry once before giving up.
+        console.error(`bridge: hermes attempt failed (${first.error || "empty reply"}), retrying`);
+        await new Promise((r) => setTimeout(r, 5000));
+        const second = await runOnce();
+        if (second.text) return resolve({ text: second.text, error: null });
+        const why = second.error || "empty reply";
+        const stderr = second.err ? `; stderr: ${second.err.slice(0, 300)}` : "";
+        return resolve({ text: null, error: `${why} (after retry)${stderr}` });
+      }
+      resolve(first);
+    })();
+
+    async function runOnce() {
+      const fresh = sessionIsFresh();
+      const args = fresh ? ["-z", prompt, "--continue"] : ["-z", prompt];
+      if (!fresh) {
+        try { writeFileSync(SESSION_MARKER, String(Date.now())); } catch { /* marker is best-effort */ }
+        console.log("bridge: starting a fresh persona session");
+      }
+      const child = spawn(HERMES_BIN, args, {
+        cwd: ROOM_DIR, env: process.env,
+      });
+      let out = "", err = "";
+      const startedAt = Date.now();
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        resolve({ text: null, error: `timed out after ${Math.round((Date.now() - startedAt) / 1000)}s` });
+      }, TIMEOUT_MS);
+      child.stdout.on("data", (d) => { out += d; });
+      child.stderr.on("data", (d) => { err += d; });
+      child.on("close", () => { clearTimeout(timer); resolve({ text: out.trim(), error: null, err }); });
+      child.on("error", (e) => { clearTimeout(timer); resolve({ text: null, error: e.message, err }); });
     }
-    const child = spawn(HERMES_BIN, args, {
-      cwd: ROOM_DIR, env: process.env,
-    });
-    let out = "", err = "";
-    const startedAt = Date.now();
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      resolve({ text: null, error: `timed out after ${Math.round((Date.now() - startedAt) / 1000)}s` });
-    }, TIMEOUT_MS);
-    child.stdout.on("data", (d) => { out += d; });
-    child.stderr.on("data", (d) => { err += d; });
-    child.on("close", () => { clearTimeout(timer); resolve({ text: out.trim(), error: null }); });
-    child.on("error", (e) => { clearTimeout(timer); resolve({ text: null, error: e.message }); });
   });
 }
 
