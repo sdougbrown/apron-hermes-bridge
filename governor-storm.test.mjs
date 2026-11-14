@@ -31,20 +31,13 @@ test('bots can still get conversational replies via name mention (gated elsewher
   assert.equal(d.action, 'reply');
 });
 
-test('a human followup within the continuation window replies even with no name', () => {
+test('an unaddressed human followup is observed — no continuation window', () => {
   const gov = new Governor(policy, { self: 'hermes', bots: ['resident', 'squire', 'colt', 'jeeves'] });
   assert.equal(gov.classify({ from: 'doug', text: 'hermes: hi' }).action, 'reply'); // opens the conversation
+  // Structure-only policy: a nameless followup seconds later does NOT wake us;
+  // whether it is "for" the bot is judged elsewhere (room router / decision gate).
   const d = gov.classify({ from: 'doug', text: 'so what did you mean by that lol' });
-  assert.equal(d.action, 'reply');
-});
-
-test('an unaddressed human message after the continuation window is just observed', () => {
-  const gov = new Governor(policy, { self: 'hermes', bots: ['resident', 'squire', 'colt', 'jeeves'] });
-  assert.equal(gov.classify({ from: 'doug', text: 'hermes: hi' }).action, 'reply');
-  // 6 minutes later — outside followupSeconds (300)
-  const realNow = Date.now; Date.now = () => realNow() + 6 * 60 * 1000;
-  try { assert.equal(gov.classify({ from: 'doug', text: 'so what did you mean by that lol' }).action, 'observe'); }
-  finally { Date.now = realNow; }
+  assert.equal(d.action, 'observe');
 });
 
 test('room heat does not defer a name mention while the bot is mid-conversation', () => {
@@ -54,13 +47,14 @@ test('room heat does not defer a name mention while the bot is mid-conversation'
   assert.equal(d.action, 'reply');
 });
 
-test('room heat still defers casual name mentions in human-to-human chatter', () => {
+test('a casual name mention in human-to-human chatter still wakes us (structure-only)', () => {
   const gov = new Governor(policy, { self: 'hermes', bots: ['resident', 'squire', 'colt', 'jeeves'] });
-  gov.classify({ from: 'doug', text: 'hey hermes, what do you think?' }); // reply — but we won't count it against a chat
-  // Simulate: bot not in the conversation — clear the reply timestamp.
-  gov.lastBotReplyAt = 0;
+  gov.classify({ from: 'doug', text: 'hey hermes, what do you think?' }); // reply — opens a conversation
+  gov.lastBotReplyAt = 0; // bot not mid-conversation: no room-heat deferral exists anymore
+  // Name-anywhere is a deliberate structural wake (the room router depends on
+  // it); whether to actually speak is decided downstream, never deferred here.
   const d = gov.classify({ from: 'eileen', text: 'lol hermes would say that' });
-  assert.equal(d.action, 'observe');
+  assert.equal(d.action, 'reply');
 });
 
 test('a DM room treats any human message as addressed — flat, no name, past the followup window', () => {
