@@ -115,24 +115,28 @@ function sessionIsFresh() {
 }
 
 function askHermes(prompt) {
-  return new Promise((resolve) => {
-    (async () => {
-      const first = await runOnce();
-      if (first.error || !first.text) {
-        // Transient CLI blips (empty stdout, one-off errors) must not eat a
-        // wake — retry once before giving up.
-        console.error(`bridge: hermes attempt failed (${first.error || "empty reply"}), retrying`);
-        await new Promise((r) => setTimeout(r, 5000));
-        const second = await runOnce();
-        if (second.text) return resolve({ text: second.text, error: null });
-        const why = second.error || "empty reply";
-        const stderr = second.err ? `; stderr: ${second.err.slice(0, 300)}` : "";
-        return resolve({ text: null, error: `${why} (after retry)${stderr}` });
-      }
-      resolve(first);
-    })();
+  return (async () => {
+    const first = await runOnce();
+    if (first.error || !first.text) {
+      if (first.timedOut) return first; // a timed-out run already burned the budget; don't retry it
+      // Transient CLI blips (empty stdout, one-off errors) must not eat a
+      // wake — retry once before giving up.
+      console.error(`bridge: hermes attempt failed (${first.error || "empty reply"}), retrying`);
+      await new Promise((r) => setTimeout(r, 5000));
+      const second = await runOnce();
+      if (second.text) return { text: second.text, error: null };
+      const why = second.error || "empty reply";
+      const stderr = second.err ? `; stderr: ${second.err.slice(0, 300)}` : "";
+      return { text: null, error: `${why} (after retry)${stderr}` };
+    }
+    return first;
+  })();
 
-    async function runOnce() {
+  // Returns the run's { text, error, err, timedOut? } — resolves the RESULT,
+  // never the outer reply promise (resolving the outer one from here is what
+  // left `await runOnce()` undefined and crashed every wake).
+  function runOnce() {
+    return new Promise((resolve) => {
       const fresh = sessionIsFresh();
       const args = fresh ? ["-z", prompt, "--continue"] : ["-z", prompt];
       if (!fresh) {
@@ -144,16 +148,18 @@ function askHermes(prompt) {
       });
       let out = "", err = "";
       const startedAt = Date.now();
+      let settled = false;
+      const done = (r) => { if (!settled) { settled = true; clearTimeout(timer); resolve(r); } };
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
-        resolve({ text: null, error: `timed out after ${Math.round((Date.now() - startedAt) / 1000)}s` });
+        done({ text: null, error: `timed out after ${Math.round((Date.now() - startedAt) / 1000)}s`, timedOut: true });
       }, TIMEOUT_MS);
       child.stdout.on("data", (d) => { out += d; });
       child.stderr.on("data", (d) => { err += d; });
-      child.on("close", () => { clearTimeout(timer); resolve({ text: out.trim(), error: null, err }); });
-      child.on("error", (e) => { clearTimeout(timer); resolve({ text: null, error: e.message, err }); });
-    }
-  });
+      child.on("close", () => done({ text: out.trim(), error: null, err }));
+      child.on("error", (e) => done({ text: null, error: e.message, err }));
+    });
+  }
 }
 
 async function postReply(roomId, replyTo, text) {
